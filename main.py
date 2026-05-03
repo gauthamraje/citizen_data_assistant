@@ -62,53 +62,74 @@ def health_check():
 
 @app.post("/threads", response_model=ThreadResponse)
 def create_thread():
-    """Create a new session (Thread) for a student."""
+    """Create a new session (Conversation) for a student."""
     try:
-        thread = client.beta.threads.create()
-        return {"thread_id": thread.id}
+        # Migrated from client.beta.threads.create() to client.conversations.create()
+        conv = client.conversations.create(metadata={"app": "citizen_data_assistant"})
+        print(f"🧵 Created new conversation: {conv.id}")
+        return {"thread_id": conv.id}
     except Exception as e:
+        print(f"❌ Error creating conversation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Temporary store for Responses results to maintain polling compatibility
+LATEST_RESPONSES = {}
 
 @app.post("/threads/{thread_id}/messages", response_model=RunResponse)
 def post_message(thread_id: str, msg: ChatMessage):
-    """Post a message to a thread and trigger an Assistant run."""
+    """Post a message and get a Response (migrated from Assistants Run)."""
     try:
-        # Add the message
-        client.beta.threads.messages.create(
-            thread_id=thread_id,
-            role="user",
-            content=msg.content
+        # Retrieve the instructions from update_assistant_prompt
+        from update_assistant_prompt import NEW_INSTRUCTIONS
+        from setup_cda_assistant import VECTOR_STORE_ID # Use the one from setup
+
+        # In the new API, we call responses.create directly
+        # We use the thread_id as the conversation_id
+        response = client.responses.create(
+            model="gpt-4o",
+            conversation={"id": thread_id},
+            store=True,
+            instructions=NEW_INSTRUCTIONS,
+            tools=[{"type": "file_search", "vector_store_ids": [os.environ.get("VECTOR_STORE_ID")]}],
+            input=msg.content
         )
-        # Create a run
-        run = client.beta.threads.runs.create(
-            thread_id=thread_id,
-            assistant_id=ASSISTANT_ID
-        )
-        return {"thread_id": thread_id, "run_id": run.id}
+        
+        # Store the response for the polling endpoint to find
+        run_id = response.id
+        LATEST_RESPONSES[run_id] = response
+        
+        print(f"🏃 Completed response {run_id} for conversation {thread_id}")
+        return {"thread_id": thread_id, "run_id": run_id}
     except Exception as e:
+        print(f"❌ Error getting response: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/threads/{thread_id}/runs/{run_id}")
 def check_run_status(thread_id: str, run_id: str):
-    """Poll for the completion of a run."""
-    try:
-        run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
-        return {"status": run.status}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Poll for the completion of a response (Migrated)."""
+    if run_id in LATEST_RESPONSES:
+        return {"status": LATEST_RESPONSES[run_id].status}
+    return {"status": "in_progress"}
 
 @app.get("/threads/{thread_id}/messages")
 def get_messages(thread_id: str):
-    """Fetch all messages from the thread (used when run is 'completed')."""
+    """Fetch the latest messages from the conversation (Migrated)."""
     try:
-        messages = client.beta.threads.messages.list(thread_id=thread_id)
-        return {"messages": [
-            {
-                "role": m.role,
-                "content": m.content[0].text.value if m.content else ""
-            } for m in messages.data
-        ][::-1]} # Reverse to get chronological order
+        # In the new API, we can get items from the conversation
+        items = client.conversations.items.list(conversation_id=thread_id)
+        
+        messages = []
+        for item in items.data:
+            if item.type == 'message':
+                messages.append({
+                    "role": item.role,
+                    "content": item.content[0].text if item.content else ""
+                })
+        
+        # The frontend expects them in chronological order
+        return {"messages": messages[::-1]}
     except Exception as e:
+        print(f"❌ Error fetching messages: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def send_to_sheet(entry: LogEntry):

@@ -534,16 +534,29 @@
 
         async function pollStatus(tid, rid) {
             const interval = setInterval(async () => {
-                const res = await fetch(`/threads/${tid}/runs/${rid}`);
-                const data = await res.json();
-                if (data.status === 'completed') {
+                try {
+                    const res = await fetch(`/threads/${tid}/runs/${rid}`);
+                    if (!res.ok) {
+                        const err = await res.json();
+                        throw new Error(err.detail || "Server error");
+                    }
+                    const data = await res.json();
+                    
+                    if (data.status === 'completed') {
+                        clearInterval(interval);
+                        loading.style.display = 'none';
+                        fetchLastMessage(tid);
+                    } else if (['failed', 'cancelled', 'expired'].includes(data.status)) {
+                        clearInterval(interval);
+                        loading.style.display = 'none';
+                        appendMessage('assistant', `The session ended with status: ${data.status}. Please try again or reset.`);
+                    }
+                    // Continue polling for 'queued', 'in_progress', 'requires_action'
+                } catch (e) {
                     clearInterval(interval);
                     loading.style.display = 'none';
-                    fetchLastMessage(tid);
-                } else if (data.status === 'failed') {
-                    clearInterval(interval);
-                    loading.style.display = 'none';
-                    appendMessage('assistant', "I'm sorry, I encountered an error. Please try again or reset the conversation.");
+                    console.error("Polling error:", e);
+                    appendMessage('assistant', "I'm sorry, I'm having trouble connecting to my brain. Please try resetting the conversation.");
                 }
             }, 1000);
         }
