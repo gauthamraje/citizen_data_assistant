@@ -13,10 +13,38 @@ import httpx
 # -----------------------------------------------------------------------------
 # CONFIGURATION
 # -----------------------------------------------------------------------------
-load_dotenv() # Load from .env file
+load_dotenv() # Load from .env file (if local)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-ASSISTANT_ID = os.environ.get("ASSISTANT_ID")
+VECTOR_STORE_ID = os.environ.get("VECTOR_STORE_ID")
 LOG_SHEET_URL = os.environ.get("LOG_SHEET_URL")
+
+# Assistant Instructions (Embedded to avoid import issues on Vercel)
+NEW_INSTRUCTIONS = """
+You are the Citizen Data Assistant (CDA), a Socratic mentor for citizens in India powered by the Samaajadata Collective. Your goal is to help citizens understand and use local data to solve civic problems.
+
+CORE MENTORING PRINCIPLES:
+1. DATA-DRIVEN INSIGHTS: Always encourage users to look for data (observations, photos, official records) to back their civic claims.
+2. UNDERSTAND FIRST: Before giving advice, ask one question to understand what data or observations the user already has.
+3. STORY-DRIVEN GUIDANCE: Use examples of how other citizens have used data to drive change. 
+4. VALIDATE THEN DISCLOSE: Only provide detailed technical or legal steps after the user has shared their context.
+5. ZERO-AMBIGUITY MANDATE: Help users find exact official roles and data sources.
+6. PLAIN-LANGUAGE PRECISION: Keep conversation warm but technical data terms accurate.
+7. SEPARATION OF DETAILS: Keep conversation warm; put technical audit checklists and data schemas after a "---" delimiter.
+8. NO CITATIONS: Never include citation markers like 【...†source】.
+9. MULTILINGUAL: Detect and mirror user language.
+
+STRICT GUARDRAILS:
+- INTERNAL KNOWLEDGE: You have access to the Samaajadata Knowledge Base. Refer to it as your 'Internal Data Library'.
+- If information is missing, guide the user on how to FIND it locally.
+
+ENTRY POINT HANDLING:
+1. "Know about Samaajadata Collective": Inform the user that we are currently working on this section and it will be available soon. Encourage them to stay tuned! In the meantime, invite them to explore other sections by clicking the **Home button** (top-right) to return to the main menu.
+2. "Get Insights from Local Data": Inform the user that we are currently working on this section and it will be available soon. Encourage them to stay tuned! In the meantime, invite them to explore other sections by clicking the **Home button** (top-right) to return to the main menu.
+3. "I have an idea and need mentoring": Initiate the **Mentoring Intake Flow**. 
+    - **Required Details (Collect one-by-one)**: 1. Problem, 2. Personal impact, 3. Solution idea, 4. Progress, 5. Help needed.
+    - Ask exactly ONE question at a time. Do NOT use step numbers.
+4. "I have a problem need solutions": Core problem-solving flow. Use your knowledge base to find relevant civic solutions.
+""".strip()
 
 # Guard against missing API key at startup
 if not OPENAI_API_KEY:
@@ -24,9 +52,9 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY or "missing")
 
-app = FastAPI(title="Socratic civic Mentor API")
+app = FastAPI(title="Socratic Civic Mentor API")
 
-# Enable CORS for all origins (especially useful for local dev)
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,13 +86,14 @@ class LogEntry(BaseModel):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "api_key_set": bool(OPENAI_API_KEY), "vs_id_set": bool(VECTOR_STORE_ID)}
 
 @app.post("/threads", response_model=ThreadResponse)
 def create_thread():
     """Create a new session (Conversation) for a student."""
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is missing in environment variables.")
     try:
-        # Migrated from client.beta.threads.create() to client.conversations.create()
         conv = client.conversations.create(metadata={"app": "citizen_data_assistant"})
         print(f"🧵 Created new conversation: {conv.id}")
         return {"thread_id": conv.id}
@@ -77,26 +106,22 @@ LATEST_RESPONSES = {}
 
 @app.post("/threads/{thread_id}/messages", response_model=RunResponse)
 def post_message(thread_id: str, msg: ChatMessage):
-    """Post a message and get a Response (migrated from Assistants Run)."""
-    try:
-        # Retrieve the instructions from update_assistant_prompt
-        from update_assistant_prompt import NEW_INSTRUCTIONS
-        vector_store_id = os.environ.get("VECTOR_STORE_ID")
+    """Post a message and get a Response."""
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is missing.")
+    if not VECTOR_STORE_ID:
+        raise HTTPException(status_code=500, detail="VECTOR_STORE_ID is missing.")
 
-        if not vector_store_id:
-            print("❌ Error: VECTOR_STORE_ID not found in environment.")
-            raise HTTPException(status_code=500, detail="VECTOR_STORE_ID not configured")
-        
+    try:
         response = client.responses.create(
             model="gpt-4o",
             conversation={"id": thread_id},
             store=True,
             instructions=NEW_INSTRUCTIONS,
-            tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+            tools=[{"type": "file_search", "vector_store_ids": [VECTOR_STORE_ID]}],
             input=msg.content
         )
         
-        # Store the response for the polling endpoint to find
         run_id = response.id
         LATEST_RESPONSES[run_id] = response
         
@@ -108,18 +133,16 @@ def post_message(thread_id: str, msg: ChatMessage):
 
 @app.get("/threads/{thread_id}/runs/{run_id}")
 def check_run_status(thread_id: str, run_id: str):
-    """Poll for the completion of a response (Migrated)."""
+    """Poll for the completion of a response."""
     if run_id in LATEST_RESPONSES:
         return {"status": LATEST_RESPONSES[run_id].status}
     return {"status": "in_progress"}
 
 @app.get("/threads/{thread_id}/messages")
 def get_messages(thread_id: str):
-    """Fetch the latest messages from the conversation (Migrated)."""
+    """Fetch the latest messages from the conversation."""
     try:
-        # In the new API, we can get items from the conversation
         items = client.conversations.items.list(conversation_id=thread_id)
-        
         messages = []
         for item in items.data:
             if item.type == 'message':
@@ -127,15 +150,12 @@ def get_messages(thread_id: str):
                     "role": item.role,
                     "content": item.content[0].text if item.content else ""
                 })
-        
-        # The frontend expects them in chronological order
         return {"messages": messages[::-1]}
     except Exception as e:
         print(f"❌ Error fetching messages: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def send_to_sheet(entry: LogEntry):
-    """Helper to send log to Google Sheets via Apps Script Hook."""
     if not LOG_SHEET_URL:
         return
     async with httpx.AsyncClient(follow_redirects=True) as http_client:
@@ -146,27 +166,23 @@ async def send_to_sheet(entry: LogEntry):
 
 @app.post("/log")
 async def log_interaction(entry: LogEntry, background_tasks: BackgroundTasks):
-    """Endpoint called by frontend to log a completed turn."""
     background_tasks.add_task(send_to_sheet, entry)
     return {"status": "logging_queued"}
 
 # -----------------------------------------------------------------------------
 # FRONTEND SERVING
 # -----------------------------------------------------------------------------
-# Note: Static files should be in the 'static' directory
 try:
     app.mount("/static", StaticFiles(directory="static"), name="static")
 except:
-    print("Warning: Static directory not found. Skipping static mount.")
+    pass
 
 @app.get("/", response_class=HTMLResponse)
 def serve_index():
-    """Serves the main mobile-fist UI."""
     try:
-        # Use absolute path resolution for Vercel
         index_path = Path(__file__).parent / "static" / "index.html"
         if index_path.exists():
             return index_path.read_text()
-        return "<h1>Project Initialized.</h1><p>Static index.html not found.</p>"
+        return "<h1>Static index.html not found.</h1>"
     except Exception as e:
         return f"<h1>Server Error</h1><p>{str(e)}</p>"
