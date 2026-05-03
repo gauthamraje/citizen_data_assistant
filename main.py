@@ -81,16 +81,18 @@ def post_message(thread_id: str, msg: ChatMessage):
     try:
         # Retrieve the instructions from update_assistant_prompt
         from update_assistant_prompt import NEW_INSTRUCTIONS
-        from setup_cda_assistant import VECTOR_STORE_ID # Use the one from setup
+        vector_store_id = os.environ.get("VECTOR_STORE_ID")
 
-        # In the new API, we call responses.create directly
-        # We use the thread_id as the conversation_id
+        if not vector_store_id:
+            print("❌ Error: VECTOR_STORE_ID not found in environment.")
+            raise HTTPException(status_code=500, detail="VECTOR_STORE_ID not configured")
+        
         response = client.responses.create(
             model="gpt-4o",
             conversation={"id": thread_id},
             store=True,
             instructions=NEW_INSTRUCTIONS,
-            tools=[{"type": "file_search", "vector_store_ids": [os.environ.get("VECTOR_STORE_ID")]}],
+            tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
             input=msg.content
         )
         

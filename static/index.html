@@ -533,6 +533,12 @@
         }
 
         async function pollStatus(tid, rid) {
+            if (!tid || tid === 'undefined' || !rid || rid === 'undefined') {
+                console.error("Critical error: Attempted to poll with undefined IDs", {tid, rid});
+                loading.style.display = 'none';
+                appendMessage('assistant', "I'm having trouble initializing our session. Please try clicking **Reset Conversation** below.");
+                return;
+            }
             const interval = setInterval(async () => {
                 try {
                     const res = await fetch(`/threads/${tid}/runs/${rid}`);
