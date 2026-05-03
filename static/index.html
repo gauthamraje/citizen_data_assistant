@@ -439,12 +439,13 @@
                 document.getElementById('welcome-screen').style.display = 'none';
             }, 300);
 
-            // If Option 4, show the initial greeting + themes
-            if (id === 4) {
+            if (id === 1 || id === 2) {
+                appendMessage('assistant', "We are currently working on this section—**stay tuned!** 🚀\n\nIn the meantime, feel free to click the **Home button** (top-right) to explore other options.");
+            } else if (id === 4) {
                 appendMessage('assistant', "I'm ready to help you solve a local problem! \n\nWhat kind of issue are you facing? You can pick a category below or tell me in your own words.");
                 renderChips(THEMES);
             } else {
-                // For 1, 2, 3 - just send the message for now
+                // For Option 3 - send to assistant
                 userInput.value = text;
                 handleSend(new Event('submit'));
             }
