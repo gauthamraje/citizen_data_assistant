@@ -1,0 +1,10 @@
+venv/
+.env
+__pycache__/
+*.pyc
+.vscode/
+.DS_Store
+scratch/
+top_500_stories.csv
+update_knowledge.py
+inspect_openai.py

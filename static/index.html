@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Civic Mentor | Community Intelligence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-light: #818cf8;
+            --bg-slate: #f8fafc;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+        }
+        body { 
+            font-family: 'Outfit', sans-serif; 
+            margin: 0;
+            background-color: var(--bg-slate);
+            display: flex;
+            justify-content: center;
+            color: var(--text-main);
+        }
+        .app-container {
+            width: 100%;
+            max-width: 480px;
+            height: 100vh;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        header {
+            padding: 1.25rem 1rem;
+            border-bottom: 1px solid #f1f5f9;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(12px);
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .shield-badge {
+            background: #f1f5f9;
+            color: var(--primary);
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 0.25rem 0.6rem;
+            border-radius: 999px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        #chat-window {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem 1rem;
+            background-color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+            scroll-behavior: smooth;
+        }
+        .bubble {
+            max-width: 88%;
+            padding: 1rem 1.25rem;
+            font-size: 0.9375rem;
+            line-height: 1.5;
+            border-radius: 1.25rem;
+            animation: slideUp 0.4s ease-out forwards;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        @keyframes slideUp { to { opacity: 1; transform: translateY(0); } }
+        
+        .assistant-bubble {
+            background: #f8fafc;
+            border: 1px solid #f1f5f9;
+            color: var(--text-main);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+        .user-bubble {
+            background: var(--primary);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.2);
+        }
+        
+        /* Interactive Chips */
+        #chips-container {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            overflow-x: auto;
+            scrollbar-width: none;
+            background: white;
+            border-top: 1px solid #f1f5f9;
+        }
+        #chips-container::-webkit-scrollbar { display: none; }
+        .chip {
+            white-space: nowrap;
+            padding: 0.5rem 1rem;
+            background: #f1f5f9;
+            color: var(--text-muted);
+            border-radius: 999px;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+        .chip:hover {
+            background: #e2e8f0;
+            color: var(--primary);
+            border-color: var(--primary-light);
+        }
+
+        footer {
+            padding: 1rem;
+            background: white;
+            border-top: 1px solid #f1f5f9;
+            z-index: 20;
+        }
+        .input-group {
+            display: flex;
+            background: #f1f5f9;
+            border-radius: 1.5rem;
+            padding: 0.6rem 1rem;
+            align-items: center;
+            gap: 0.6rem;
+            transition: ring 0.2s;
+        }
+        .input-group:focus-within {
+            ring: 2px solid var(--primary-light);
+            background: white;
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+        }
+        input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            font-size: 0.9375rem;
+            color: var(--text-main);
+        }
+        button.send {
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s;
+        }
+        button.send:active { transform: scale(0.9); }
+
+        /* Technical Dossier Drawer */
+        #drawer {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(4px);
+            z-index: 30;
+            display: none;
+            flex-direction: column;
+            justify-content: flex-end;
+        }
+        .drawer-sheet {
+            background: white;
+            border-top-left-radius: 2rem;
+            border-top-right-radius: 2rem;
+            max-height: 85vh;
+            overflow-y: auto;
+            padding: 2rem 1.5rem;
+            box-shadow: 0 -10px 25px rgba(0,0,0,0.1);
+        }
+        .dossier-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 600;
+        }
+
+        #loading {
+            padding: 0.5rem 1.25rem;
+            font-size: 0.8125rem;
+            color: var(--primary);
+            font-weight: 500;
+            display: none;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .dot-flashing {
+            position: relative;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: var(--primary);
+            color: var(--primary);
+            animation: dot-flashing 1s infinite linear alternate;
+            animation-delay: 0.5s;
+        }
+        .dot-flashing::before, .dot-flashing::after {
+            content: "";
+            display: inline-block;
+            position: absolute;
+            top: 0;
+        }
+        .dot-flashing::before {
+            left: -12px;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: var(--primary);
+            color: var(--primary);
+            animation: dot-flashing 1s infinite linear alternate;
+            animation-delay: 0s;
+        }
+        .dot-flashing::after {
+            left: 12px;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: var(--primary);
+            color: var(--primary);
+            animation: dot-flashing 1s infinite linear alternate;
+            animation-delay: 1s;
+        }
+        @keyframes dot-flashing {
+            0% { background-color: var(--primary); }
+            50%, 100% { background-color: #e2e8f0; }
+        }
+
+        /* Choice Board Styling */
+        #welcome-screen {
+            position: absolute;
+            inset: 0;
+            background: white;
+            z-index: 40;
+            display: none;
+            flex-direction: column;
+            padding: 2rem 1.5rem;
+            animation: fadeIn 0.5s ease-out;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        .choice-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+        .choice-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 1.25rem;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            text-align: left;
+        }
+        .choice-card:hover {
+            border-color: var(--primary);
+            background: #f5f3ff;
+            transform: translateY(-4px);
+            box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.1);
+        }
+        .choice-icon {
+            width: 40px;
+            height: 40px;
+            background: white;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+            color: var(--primary);
+        }
+        .choice-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-main);
+            line-height: 1.25;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        <header>
+            <div style="font-weight: 600; font-size: 1.125rem; color: #0f172a; display: flex; align-items: center; gap: 0.5rem;">
+                <div style="width: 8px; height: 8px; background: #6366f1; border-radius: 50%;"></div>
+                Citizen Data Assistant
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <div class="shield-badge" style="font-size: 0.55rem; padding: 0.25rem 0.5rem;">
+                    <svg width="10" height="10" fill="currentColor" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 2.18l7 3.11v4.71c0 4.52-3.12 8.71-7 9.87-3.88-1.16-7-5.35-7-9.87V6.29l7-3.11z"/></svg>
+                    Samaajadata Knowledge Shield
+                </div>
+                <button onclick="resetSession()" style="background: #f1f5f9; border: none; cursor: pointer; color: var(--text-muted); display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; transition: all 0.2s; padding: 0;" title="Back to Main Menu" onmouseover="this.style.color='var(--primary)'; this.style.background='#e0e7ff'" onmouseout="this.style.color='var(--text-muted)'; this.style.background='#f1f5f9'">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                </button>
+            </div>
+        </header>
+
+        <div id="welcome-screen">
+            <div style="margin-top: 2rem;">
+                <h1 style="font-size: 1.75rem; font-weight: 700; color: #0f172a; line-height: 1.2;">Citizen Data<br>Assistant</h1>
+                <p style="color: var(--text-muted); margin-top: 0.75rem; font-size: 0.9375rem;">Unlock local insights with Samaajadata Collective. How can I help you today?</p>
+            </div>
+
+            <div class="choice-grid">
+                <div class="choice-card" onclick="selectOption(1, 'Know about Samaajadata Collective')">
+                    <div class="choice-icon">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <div class="choice-title">Know about Samaajadata Collective</div>
+                </div>
+                <div class="choice-card" onclick="selectOption(2, 'Get Insights from Local Data')">
+                    <div class="choice-icon">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                    </div>
+                    <div class="choice-title">Get Insights from Local Data</div>
+                </div>
+                <div class="choice-card" onclick="selectOption(3, 'I have an idea and need mentoring')">
+                    <div class="choice-icon">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                    </div>
+                    <div class="choice-title">I have an idea and need mentoring</div>
+                </div>
+                <div class="choice-card" onclick="selectOption(4, 'I have a problem need solutions')">
+                    <div class="choice-icon">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                    </div>
+                    <div class="choice-title">I have a problem need solutions</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: auto; padding-bottom: 2rem; text-align: center;">
+                <p style="font-size: 0.75rem; color: var(--text-muted);">Empowering Citizens with Data</p>
+            </div>
+        </div>
+
+        <main id="chat-window">
+            <!-- Messages injected here -->
+        </main>
+
+        <div id="loading">
+            <div class="dot-flashing"></div>
+            <span style="margin-left: 1.5rem;">Mentor is reflecting...</span>
+        </div>
+
+        <div id="chips-container">
+            <!-- Chips injected here -->
+        </div>
+
+        <footer>
+            <form id="chat-form" onsubmit="handleSend(event)">
+                <div class="input-group">
+                    <input id="user-input" type="text" placeholder="Tell me what problem you found..." autocomplete="off">
+                    <button type="submit" class="send">
+                        <svg width="18" height="18" fill="white" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                    </button>
+                </div>
+            </form>
+            <div style="text-align: center; margin-top: 0.75rem;">
+                <button onclick="resetSession()" style="font-size: 0.7rem; color: var(--text-muted); background: none; border: none; cursor: pointer; text-decoration: underline;">Reset Conversation</button>
+            </div>
+        </footer>
+
+        <div id="drawer" onclick="toggleDrawer(false)">
+            <div class="drawer-sheet" onclick="event.stopPropagation()">
+                <div style="width: 40px; height: 4px; background: #e2e8f0; border-radius: 10px; margin: -1rem auto 1.5rem;"></div>
+                <div class="dossier-header">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    📋 Action Blueprint & Checklist
+                </div>
+                <div style="background: var(--bg-slate); border-bottom: 2px solid var(--primary-light); padding: 0.75rem 1rem; border-radius: 0.5rem; font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 1.5rem; line-height: 1.4;">
+                    <strong>💡 PRO TIP:</strong> These details are your <strong>'Secret Codes'</strong>—use the specific names and law codes below when speaking with officials. It shows you mean business.
+                </div>
+                <div id="drawer-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let threadId = localStorage.getItem('thread_id');
+        const chatWindow = document.getElementById('chat-window');
+        const userInput = document.getElementById('user-input');
+        const loading = document.getElementById('loading');
+        const drawer = document.getElementById('drawer');
+        const drawerContent = document.getElementById('drawer-content');
+        const chipsContainer = document.getElementById('chips-container');
+
+        const THEMES = [
+            { label: "🌍 Cleanliness & Waste", value: "Show me Cleanliness & Waste solutions" },
+            { label: "💡 Safety & Streets", value: "Help me with Safety & Street improvements" },
+            { label: "🏫 Eco-Campus", value: "How can I make my School/College greener?" },
+            { label: "💧 Water & Climate", value: "Find missions for Water & Climate action" }
+        ];
+
+        async function initSession() {
+            if (!threadId) {
+                const res = await fetch('/threads', { method: 'POST' });
+                const data = await res.json();
+                threadId = data.thread_id;
+                localStorage.setItem('thread_id', threadId);
+                
+                // Show Welcome Choice Board
+                document.getElementById('welcome-screen').style.display = 'flex';
+            } else {
+                appendMessage('assistant', "Welcome back! Ready to continue your change-maker journey?");
+            }
+        }
+
+        async function selectOption(id, text) {
+            // Hide welcome screen
+            document.getElementById('welcome-screen').style.opacity = '0';
+            setTimeout(() => {
+                document.getElementById('welcome-screen').style.display = 'none';
+            }, 300);
+
+            // If Option 4, show the initial greeting + themes
+            if (id === 4) {
+                appendMessage('assistant', "I'm ready to help you solve a local problem! \n\nWhat kind of issue are you facing? You can pick a category below or tell me in your own words.");
+                renderChips(THEMES);
+            } else {
+                // For 1, 2, 3 - just send the message for now
+                userInput.value = text;
+                handleSend(new Event('submit'));
+            }
+        }
+
+        function renderChips(items) {
+            chipsContainer.innerHTML = '';
+            if (!items || items.length === 0) {
+                chipsContainer.style.display = 'none';
+                return;
+            }
+            
+            // Add a category header
+            const header = document.createElement('div');
+            header.style.cssText = 'width: 100%; font-size: 0.75rem; color: var(--text-muted); font-weight: 500; margin-bottom: 0.5rem; padding-left: 0.25rem;';
+            header.textContent = "Explore Solution Categories:";
+            chipsContainer.appendChild(header);
+            chipsContainer.style.flexWrap = 'wrap';
+            
+            chipsContainer.style.display = 'flex';
+            items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'chip';
+                div.textContent = item.label;
+                div.onclick = () => {
+                    userInput.value = item.value;
+                    handleSend(new Event('submit'));
+                };
+                chipsContainer.appendChild(div);
+            });
+        }
+
+        function appendMessage(role, content) {
+            const div = document.createElement('div');
+            div.className = `bubble ${role === 'user' ? 'user-bubble' : 'assistant-bubble'}`;
+            
+            // Handle splitting technical details
+            const parts = content.split('---');
+            const mainContent = parts[0].replace(/【\d+:\d+†source】/g, '');
+            div.innerHTML = marked.parse(mainContent);
+
+            // If there are technical details (part 2+), add a button
+            if (parts.length > 1 && role === 'assistant') {
+                const btn = document.createElement('button');
+                btn.className = 'mt-3 flex items-center gap-2 text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100 transition-colors';
+                btn.innerHTML = `
+                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    View My Action Blueprint
+                `;
+                btn.onclick = () => toggleDrawer(true, parts.slice(1).join('---'));
+                div.appendChild(btn);
+            }
+
+            chatWindow.appendChild(div);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+
+        function toggleDrawer(show, content = '') {
+            drawer.style.display = show ? 'flex' : 'none';
+            if (show) drawerContent.innerHTML = marked.parse(content);
+        }
+
+        function resetSession() {
+            localStorage.removeItem('thread_id');
+            location.reload();
+        }
+
+        async function handleSend(e) {
+            e.preventDefault();
+            const text = userInput.value.trim();
+            if (!text) return;
+
+            appendMessage('user', text);
+            userInput.value = '';
+            renderChips([]); // Clear chips on send
+            loading.style.display = 'flex';
+
+            const res = await fetch(`/threads/${threadId}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: text })
+            });
+            const data = await res.json();
+            pollStatus(threadId, data.run_id);
+        }
+
+        async function pollStatus(tid, rid) {
+            const interval = setInterval(async () => {
+                const res = await fetch(`/threads/${tid}/runs/${rid}`);
+                const data = await res.json();
+                if (data.status === 'completed') {
+                    clearInterval(interval);
+                    loading.style.display = 'none';
+                    fetchLastMessage(tid);
+                } else if (data.status === 'failed') {
+                    clearInterval(interval);
+                    loading.style.display = 'none';
+                    appendMessage('assistant', "I'm sorry, I encountered an error. Please try again or reset the conversation.");
+                }
+            }, 1000);
+        }
+
+        async function fetchLastMessage(tid) {
+            const res = await fetch(`/threads/${tid}/messages`);
+            const data = await res.json();
+            const last = data.messages[data.messages.length - 1];
+            if (last.role === 'assistant') {
+                appendMessage('assistant', last.content);
+                
+                // Smart Chip Detection
+                const lowerText = last.content.toLowerCase();
+                if (lowerText.includes('passionate about') || lowerText.includes('theme') || lowerText.includes('area')) {
+                    renderChips(THEMES);
+                }
+
+                // Logging
+                const userMsg = data.messages[data.messages.length - 2];
+                if (userMsg && userMsg.role === 'user') {
+                    fetch('/log', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            thread_id: tid,
+                            user_query: userMsg.content,
+                            bot_response: last.content.split('---')[0]
+                        })
+                    });
+                }
+            }
+        }
+
+        initSession();
+    </script>
+</body>
+</html>

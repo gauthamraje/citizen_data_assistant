@@ -1,0 +1,23 @@
+{
+  "rewrites": [
+    {
+      "source": "/(api|threads|health|static|log)/(.*)",
+      "destination": "main.py"
+    },
+    {
+      "source": "/",
+      "destination": "main.py"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        }
+      ]
+    }
+  ]
+}
