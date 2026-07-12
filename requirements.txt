@@ -1,6 +1,8 @@
 fastapi
 uvicorn
-openai
+anthropic
+rank-bm25
+httpx-sse
 pydantic
 python-multipart
 python-dotenv

@@ -5,6 +5,6 @@ __pycache__/
 .vscode/
 .DS_Store
 scratch/
-top_500_stories.csv
+# top_500_stories.csv kept for reference; default KB is knowledge_base_11_columns.csv
 update_knowledge.py
 inspect_openai.py

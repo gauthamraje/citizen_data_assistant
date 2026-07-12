@@ -85,6 +85,35 @@
             align-self: flex-start;
             border-bottom-left-radius: 4px;
         }
+        .assistant-bubble.insights-bubble {
+            background: linear-gradient(135deg, #f0f9ff 0%, #f8fafc 100%);
+            border: 1px solid #e0f2fe;
+            max-width: 94%;
+        }
+        .insights-headline {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: #0f172a;
+            margin-bottom: 0.75rem;
+            line-height: 1.35;
+        }
+        .insight-chart {
+            margin-top: 1rem;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+            background: white;
+        }
+        .insight-chart img {
+            width: 100%;
+            display: block;
+        }
+        .insight-chart-caption {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            padding: 0.5rem 0.75rem;
+            border-top: 1px solid #f1f5f9;
+        }
         .user-bubble {
             background: var(--primary);
             color: white;
@@ -404,12 +433,60 @@
 
     <script>
         let threadId = localStorage.getItem('thread_id');
+        let flowMode = localStorage.getItem('flow_mode') || 'general';
         const chatWindow = document.getElementById('chat-window');
         const userInput = document.getElementById('user-input');
         const loading = document.getElementById('loading');
         const drawer = document.getElementById('drawer');
         const drawerContent = document.getElementById('drawer-content');
         const chipsContainer = document.getElementById('chips-container');
+
+        const INSIGHT_PROMPTS = [
+            { label: "🗑️ Waste · Bangalore", value: "How much waste and cleanliness data exists for Bangalore?" },
+            { label: "💧 Water · Delhi", value: "Show me water-related civic data for Delhi." },
+            { label: "🌬️ Air · Mumbai", value: "What air quality data exists for Mumbai?" },
+            { label: "🚦 Streets · Chennai", value: "What street and traffic civic data is available for Chennai?" }
+        ];
+
+        const INSIGHT_FOLLOWUPS = [
+            { label: "📊 Show as chart", value: "Show this as a chart" },
+            { label: "🔍 Break down further", value: "Break this down by subcategory or area" },
+            { label: "🔄 Another city", value: "Show the same data for a different city" },
+            { label: "💡 What can I do?", value: "Based on this data, what civic action could I take?" }
+        ];
+
+        let activePollId = null;
+        let displayedAssistantCount = 0;
+
+        function extractImageUrls(text) {
+            const urls = new Set();
+            const mdImg = /!\[[^\]]*\]\((https?:\/\/[^\)]+)\)/gi;
+            const plain = /(https?:\/\/[^\s\)<"]+\.(?:png|jpg|jpeg|webp|gif))/gi;
+            let match;
+            while ((match = mdImg.exec(text)) !== null) urls.add(match[1]);
+            while ((match = plain.exec(text)) !== null) urls.add(match[1]);
+            return [...urls];
+        }
+
+        function stripMarkdownImages(text) {
+            // Remove ALL markdown images (including empty/placeholder like ![...]() or ![...](IMAGE_URL))
+            // so broken/placeholder charts never render as empty blocks. Real charts are rendered
+            // separately from extractImageUrls().
+            return text.replace(/!\[[^\]]*\]\([^\)]*\)/g, '').trim();
+        }
+
+        const INSIGHT_LOADING_FALLBACKS = [
+            'Connecting to SamaajData...',
+            'Finding your city and topic...',
+            'Pulling live civic records...',
+            'Crunching the numbers...',
+            'Almost ready...'
+        ];
+
+        function setFlowMode(mode) {
+            flowMode = mode;
+            localStorage.setItem('flow_mode', mode);
+        }
 
         const THEMES = [
             { label: "🌍 Cleanliness & Waste", value: "Show me Cleanliness & Waste solutions" },
@@ -440,28 +517,36 @@
             }, 300);
 
             if (id === 2) {
-                appendMessage('assistant', "We are currently working on this section—**stay tuned!** 🚀\n\nIn the meantime, feel free to click the **Home button** (top-right) to explore other options.");
+                setFlowMode('insights');
+                userInput.placeholder = 'e.g. Waste data in Bangalore';
+                appendMessage('assistant', "📊 **Local Data Insights**\n\nI'll query live civic data from the SamaajData Collective and show you counts, trends, and charts.\n\nPick a **city + topic** below to get started.", { insights: true });
+                renderChips(INSIGHT_PROMPTS, 'Quick starts:');
             } else if (id === 4) {
+                setFlowMode('solutions');
+                userInput.placeholder = 'Tell me what problem you found...';
                 appendMessage('assistant', "I'm ready to help you solve a local problem! \n\nWhat kind of issue are you facing? You can pick a category below or tell me in your own words.");
                 renderChips(THEMES);
+            } else if (id === 3) {
+                setFlowMode('mentoring');
+                userInput.value = text;
+                handleSend(new Event('submit'));
             } else {
-                // For Option 3 - send to assistant
+                setFlowMode('general');
                 userInput.value = text;
                 handleSend(new Event('submit'));
             }
         }
 
-        function renderChips(items) {
+        function renderChips(items, headerText = 'Explore Solution Categories:') {
             chipsContainer.innerHTML = '';
             if (!items || items.length === 0) {
                 chipsContainer.style.display = 'none';
                 return;
             }
             
-            // Add a category header
             const header = document.createElement('div');
             header.style.cssText = 'width: 100%; font-size: 0.75rem; color: var(--text-muted); font-weight: 500; margin-bottom: 0.5rem; padding-left: 0.25rem;';
-            header.textContent = "Explore Solution Categories:";
+            header.textContent = headerText;
             chipsContainer.appendChild(header);
             chipsContainer.style.flexWrap = 'wrap';
             
@@ -478,26 +563,51 @@
             });
         }
 
-        function appendMessage(role, content) {
+        function appendMessage(role, content, options = {}) {
+            const isInsights = options.insights || flowMode === 'insights';
             const div = document.createElement('div');
             div.className = `bubble ${role === 'user' ? 'user-bubble' : 'assistant-bubble'}`;
-            
-            // Handle splitting technical details
-            const parts = content.split('---');
-            const mainContent = parts[0].replace(/【\d+:\d+†source】/g, '');
-            div.innerHTML = marked.parse(mainContent);
-
-            // If there are technical details (part 2+), add a button
-            if (parts.length > 1 && role === 'assistant') {
-                const btn = document.createElement('button');
-                btn.className = 'mt-3 flex items-center gap-2 text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100 transition-colors';
-                btn.innerHTML = `
-                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                    View My Action Blueprint
-                `;
-                btn.onclick = () => toggleDrawer(true, parts.slice(1).join('---'));
-                div.appendChild(btn);
+            if (role === 'assistant' && isInsights) {
+                div.classList.add('insights-bubble');
             }
+
+            const chartUrls = role === 'assistant' && isInsights ? extractImageUrls(content) : [];
+            let body = content.replace(/【\d+:\d+†source】/g, '');
+
+            if (role === 'assistant' && isInsights) {
+                body = stripMarkdownImages(body);
+                // Insights render in full. Do NOT split on '---' (that is only for the
+                // Action Blueprint drawer in Solutions/Mentoring). Splitting here would
+                // discard the entire insight when the model emits a leading '---'.
+                // Drop standalone '---' horizontal-rule lines so the text stays clean.
+                body = body.replace(/^\s*-{3,}\s*$/gm, '').trim();
+            } else if (role === 'assistant') {
+                const parts = body.split('---');
+                body = parts[0];
+                div.innerHTML = marked.parse(body);
+                if (parts.length > 1) {
+                    const btn = document.createElement('button');
+                    btn.className = 'mt-3 flex items-center gap-2 text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100 transition-colors';
+                    btn.innerHTML = `
+                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        View My Action Blueprint
+                    `;
+                    btn.onclick = () => toggleDrawer(true, parts.slice(1).join('---'));
+                    div.appendChild(btn);
+                }
+                chatWindow.appendChild(div);
+                chatWindow.scrollTop = chatWindow.scrollHeight;
+                return;
+            }
+
+            div.innerHTML = marked.parse(body);
+
+            chartUrls.forEach(url => {
+                const wrap = document.createElement('div');
+                wrap.className = 'insight-chart';
+                wrap.innerHTML = `<img src="${url}" alt="SamaajData chart" loading="lazy"><div class="insight-chart-caption">Live data from SamaajData Collective</div>`;
+                div.appendChild(wrap);
+            });
 
             chatWindow.appendChild(div);
             chatWindow.scrollTop = chatWindow.scrollHeight;
@@ -510,7 +620,15 @@
 
         function resetSession() {
             localStorage.removeItem('thread_id');
+            localStorage.removeItem('flow_mode');
+            activePollId = null;
+            displayedAssistantCount = 0;
             location.reload();
+        }
+
+        function setLoadingMessage(text) {
+            const label = loading.querySelector('span');
+            if (label) label.textContent = text;
         }
 
         async function handleSend(e) {
@@ -522,13 +640,23 @@
             userInput.value = '';
             renderChips([]); // Clear chips on send
             loading.style.display = 'flex';
+            setLoadingMessage(
+                flowMode === 'insights'
+                    ? 'Connecting to SamaajData... (10–20 sec)'
+                    : 'Mentor is reflecting...'
+            );
 
             const res = await fetch(`/threads/${threadId}/messages`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: text })
+                body: JSON.stringify({ content: text, flow_mode: flowMode })
             });
             const data = await res.json();
+            if (!res.ok) {
+                loading.style.display = 'none';
+                appendMessage('assistant', `Something went wrong: ${data.detail || 'Server error'}. Please try again or reset.`);
+                return;
+            }
             pollStatus(threadId, data.run_id);
         }
 
@@ -539,7 +667,22 @@
                 appendMessage('assistant', "I'm having trouble initializing our session. Please try clicking **Reset Conversation** below.");
                 return;
             }
+
+            if (activePollId === rid) return;
+            activePollId = rid;
+
+            let fallbackIndex = 0;
+            let finished = false;
+            const fallbackTimer = flowMode === 'insights'
+                ? setInterval(() => {
+                    if (finished || loading.style.display === 'none') return;
+                    setLoadingMessage(INSIGHT_LOADING_FALLBACKS[fallbackIndex % INSIGHT_LOADING_FALLBACKS.length]);
+                    fallbackIndex += 1;
+                }, 4000)
+                : null;
+
             const interval = setInterval(async () => {
+                if (finished) return;
                 try {
                     const res = await fetch(`/threads/${tid}/runs/${rid}`);
                     if (!res.ok) {
@@ -547,20 +690,25 @@
                         throw new Error(err.detail || "Server error");
                     }
                     const data = await res.json();
-                    
-                    if (data.status === 'completed') {
-                        clearInterval(interval);
-                        loading.style.display = 'none';
-                        fetchLastMessage(tid);
-                    } else if (['failed', 'cancelled', 'expired'].includes(data.status)) {
-                        clearInterval(interval);
-                        loading.style.display = 'none';
-                        appendMessage('assistant', `The session ended with status: ${data.status}. Please try again or reset.`);
+
+                    if (data.progress) {
+                        setLoadingMessage(data.progress);
                     }
-                    // Continue polling for 'queued', 'in_progress', 'requires_action'
+
+                    if (data.status === 'completed' || ['failed', 'cancelled', 'expired'].includes(data.status)) {
+                        finished = true;
+                        clearInterval(interval);
+                        if (fallbackTimer) clearInterval(fallbackTimer);
+                        loading.style.display = 'none';
+                        activePollId = null;
+                        await fetchLastMessage(tid);
+                    }
                 } catch (e) {
+                    finished = true;
                     clearInterval(interval);
+                    if (fallbackTimer) clearInterval(fallbackTimer);
                     loading.style.display = 'none';
+                    activePollId = null;
                     console.error("Polling error:", e);
                     appendMessage('assistant', "I'm sorry, I'm having trouble connecting to my brain. Please try resetting the conversation.");
                 }
@@ -570,29 +718,33 @@
         async function fetchLastMessage(tid) {
             const res = await fetch(`/threads/${tid}/messages`);
             const data = await res.json();
-            const last = data.messages[data.messages.length - 1];
-            if (last.role === 'assistant') {
-                appendMessage('assistant', last.content);
-                
-                // Smart Chip Detection
+            const assistantMessages = data.messages.filter(m => m.role === 'assistant');
+            if (assistantMessages.length <= displayedAssistantCount) return;
+
+            const last = assistantMessages[assistantMessages.length - 1];
+            displayedAssistantCount = assistantMessages.length;
+            appendMessage('assistant', last.content, { insights: flowMode === 'insights' });
+
+            if (flowMode === 'insights') {
+                renderChips(INSIGHT_FOLLOWUPS, 'Go deeper:');
+            } else {
                 const lowerText = last.content.toLowerCase();
                 if (lowerText.includes('passionate about') || lowerText.includes('theme') || lowerText.includes('area')) {
                     renderChips(THEMES);
                 }
+            }
 
-                // Logging
-                const userMsg = data.messages[data.messages.length - 2];
-                if (userMsg && userMsg.role === 'user') {
-                    fetch('/log', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            thread_id: tid,
-                            user_query: userMsg.content,
-                            bot_response: last.content.split('---')[0]
-                        })
-                    });
-                }
+            const userMsg = data.messages[data.messages.length - 2];
+            if (userMsg && userMsg.role === 'user') {
+                fetch('/log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        thread_id: tid,
+                        user_query: userMsg.content,
+                        bot_response: last.content.split('---')[0]
+                    })
+                });
             }
         }
 

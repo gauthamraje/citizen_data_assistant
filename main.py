@@ -1,24 +1,32 @@
 import os
+import uuid
 from pathlib import Path
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException, status, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from openai import OpenAI
+from typing import Any, Dict, List, Optional
+
+from anthropic import Anthropic
 from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 import httpx
+
+from claude_agent import generate_standard, generate_with_mcp_tools
+from knowledge_base import KnowledgeBase
 
 # -----------------------------------------------------------------------------
 # CONFIGURATION
 # -----------------------------------------------------------------------------
-load_dotenv() # Load from .env file (if local)
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-VECTOR_STORE_ID = os.environ.get("VECTOR_STORE_ID")
+load_dotenv()
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 LOG_SHEET_URL = os.environ.get("LOG_SHEET_URL")
+KNOWLEDGE_BASE_CSV = os.environ.get("KNOWLEDGE_BASE_CSV", "knowledge_base_11_columns.csv")
+KNOWLEDGE_TOP_K = int(os.environ.get("KNOWLEDGE_TOP_K", "6"))
+SAMAAJDATA_MCP_URL = os.environ.get("SAMAAJDATA_MCP_URL", "https://mcp.samaajdata.org/sse")
 
-# Assistant Instructions (Embedded to avoid import issues on Vercel)
+# Latest merged instructions (Option 1 from main + mentoring/KB flows from update_assistant_prompt)
 NEW_INSTRUCTIONS = """
 You are the Citizen Data Assistant (CDA), a Socratic mentor for citizens in India powered by the Samaajadata Collective. Your goal is to help citizens understand and use local data to solve civic problems.
 
@@ -34,7 +42,10 @@ CORE MENTORING PRINCIPLES:
 9. MULTILINGUAL: Detect and mirror user language.
 
 STRICT GUARDRAILS:
-- INTERNAL KNOWLEDGE: You have access to the Samaajadata Knowledge Base. Refer to it as your 'Internal Data Library'.
+- INTERNAL KNOWLEDGE: You have access to the Samaajadata Knowledge Base (verified golden-standard civic missions). Refer to it as your 'Internal Data Library'.
+- When search results are provided with a user message, use ONLY those missions for recommendations. Never invent missions, officials, or scripts.
+- Use real mission titles and story context from the library. Never mention CSV files, search results, retrieval, or file names.
+- If no mission fits, say you do not have a verified mission for this yet and guide the user on how to investigate locally.
 - If information is missing, guide the user on how to FIND it locally.
 
 ENTRY POINT HANDLING:
@@ -45,22 +56,44 @@ ENTRY POINT HANDLING:
     - **Roots**: An initiative of Reap Benefit, growing out of a decade of changemaking by the Solve Ninja movement.
     - **Principles**: Community is the moat, "Wikipedia, not Encyclopedia" (living resource), amplification over storage, and building in public.
     - Encourage users to join by contributing data or crafting narratives.
-2. "Get Insights from Local Data": Inform the user that we are currently working on this section and it will be available soon. Encourage them to stay tuned! In the meantime, invite them to explore other sections by clicking the **Home button** (top-right) to return to the main menu.
+2. "Get Insights from Local Data": Initiate the **Local Data Insights Flow** — a data dashboard experience, NOT mentoring or missions.
+    - Pull live civic data from SamaajData (counts, locations, trends, charts).
+    - Lead with a headline stat, then bullets, then a chart when the data supports it.
+    - Offer one follow-up to go deeper — never dump action blueprints or mission steps here.
+    - Never mention MCP, tools, or APIs — say you pulled this from **SamaajData Collective**.
 3. "I have an idea and need mentoring": Initiate the **Mentoring Intake Flow**. 
-    - **Required Details (Collect one-by-one)**: 1. Problem, 2. Personal impact, 3. Solution idea, 4. Progress, 5. Help needed.
-    - Ask exactly ONE question at a time. Do NOT use step numbers.
-4. "I have a problem need solutions": Core problem-solving flow. Use your knowledge base to find relevant civic solutions.
+    - **PRIORITY**: Once this flow starts, you MUST collect all 5 pieces of information before suggesting any library missions or "Next Steps". Do NOT pivot to mission-matching until the user has confirmed the summary.
+    - **CONVERSATIONAL MANDATE**: Do NOT use step numbers or labels. Ask exactly **ONE question** at a time. Keep preambles extremely brief.
+    - **Required Details (Collect one-by-one)**:
+        1. The problem discovered.
+        2. Why it's a personal problem.
+        3. The solution idea.
+        4. Any testing or progress.
+        5. Specific help needed from a mentor.
+    - **Recap**: ONLY after all 5 details are collected, provide a structured summary and ask: "Does this look right? Once you confirm, I'll send this to our mentor team."
+    - **Final Promise**: After confirmation, provide the 48-hour promise.
+4. "I have a problem need solutions": This is your core problem-solving flow. Use your knowledge base to find relevant civic solutions and data-driven missions.
 """.strip()
 
-# Guard against missing API key at startup
-if not OPENAI_API_KEY:
-    print("WARNING: OPENAI_API_KEY is not set. The assistant will not function.")
+if not ANTHROPIC_API_KEY:
+    print("WARNING: ANTHROPIC_API_KEY is not set. The assistant will not function.")
 
-client = OpenAI(api_key=OPENAI_API_KEY or "missing")
+client = Anthropic(api_key=ANTHROPIC_API_KEY or "missing")
+
+knowledge_base = KnowledgeBase(
+    Path(__file__).parent / KNOWLEDGE_BASE_CSV,
+    top_k=KNOWLEDGE_TOP_K,
+)
+try:
+    knowledge_base.load()
+    print(
+        f"📚 Loaded {knowledge_base.mission_count} missions from {KNOWLEDGE_BASE_CSV}"
+    )
+except Exception as exc:
+    print(f"WARNING: Knowledge base failed to load: {exc}")
 
 app = FastAPI(title="Socratic Civic Mentor API")
 
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -68,11 +101,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# In-memory session store (Phase 1 — replace with KV/Redis before production deploy)
+THREADS: Dict[str, List[Dict[str, Any]]] = {}
+THREAD_MODES: Dict[str, str] = {}
+LATEST_RESPONSES: Dict[str, str] = {}
+RUN_PROGRESS: Dict[str, str] = {}
+
 # -----------------------------------------------------------------------------
 # MODELS
 # -----------------------------------------------------------------------------
 class ChatMessage(BaseModel):
     content: str
+    flow_mode: Optional[str] = None
 
 class ThreadResponse(BaseModel):
     thread_id: str
@@ -80,6 +120,7 @@ class ThreadResponse(BaseModel):
 class RunResponse(BaseModel):
     thread_id: str
     run_id: str
+    async_mode: bool = False
 
 class LogEntry(BaseModel):
     thread_id: str
@@ -92,74 +133,154 @@ class LogEntry(BaseModel):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "api_key_set": bool(OPENAI_API_KEY), "vs_id_set": bool(VECTOR_STORE_ID)}
+    return {
+        "status": "ok",
+        "api_key_set": bool(ANTHROPIC_API_KEY),
+        "provider": "claude",
+        "model": CLAUDE_MODEL,
+        "knowledge_base_loaded": knowledge_base.loaded,
+        "mission_count": knowledge_base.mission_count,
+        "knowledge_base_csv": KNOWLEDGE_BASE_CSV,
+        "mcp_url": SAMAAJDATA_MCP_URL,
+    }
 
 @app.post("/threads", response_model=ThreadResponse)
 def create_thread():
-    """Create a new session (Conversation) for a student."""
-    if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is missing in environment variables.")
-    try:
-        conv = client.conversations.create(metadata={"app": "citizen_data_assistant"})
-        print(f"🧵 Created new conversation: {conv.id}")
-        return {"thread_id": conv.id}
-    except Exception as e:
-        print(f"❌ Error creating conversation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Create a new chat session."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="ANTHROPIC_API_KEY is missing in environment variables.",
+        )
+    thread_id = str(uuid.uuid4())
+    THREADS[thread_id] = []
+    THREAD_MODES[thread_id] = "general"
+    print(f"🧵 Created new thread: {thread_id}")
+    return {"thread_id": thread_id}
 
-# Temporary store for Responses results to maintain polling compatibility
-LATEST_RESPONSES = {}
+async def _process_insights_message(
+    thread_id: str,
+    run_id: str,
+    user_text: str,
+) -> None:
+    def on_progress(message: str) -> None:
+        RUN_PROGRESS[run_id] = message
+
+    try:
+        assistant_text, _response_id = await generate_with_mcp_tools(
+            client,
+            model=CLAUDE_MODEL,
+            system=NEW_INSTRUCTIONS,
+            history=THREADS[thread_id],
+            user_text=user_text,
+            mcp_url=SAMAAJDATA_MCP_URL,
+            on_progress=on_progress,
+        )
+        THREADS[thread_id].append({"role": "assistant", "content": assistant_text})
+        LATEST_RESPONSES[run_id] = "completed"
+        print(f"🏃 Completed insights response {run_id} for thread {thread_id}")
+    except Exception as exc:
+        THREADS[thread_id].append(
+            {
+                "role": "assistant",
+                "content": (
+                    "I couldn't pull that data right now — SamaajData may not have "
+                    "records for that exact city and topic.\n\n"
+                    "Try a quick-start chip (e.g. **Waste · Bangalore**) or ask about "
+                    "a different city."
+                ),
+            }
+        )
+        LATEST_RESPONSES[run_id] = "failed"
+        print(f"❌ Insights error for {run_id}: {exc}")
+    finally:
+        RUN_PROGRESS.pop(run_id, None)
 
 @app.post("/threads/{thread_id}/messages", response_model=RunResponse)
-def post_message(thread_id: str, msg: ChatMessage):
-    """Post a message and get a Response."""
-    if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is missing.")
-    if not VECTOR_STORE_ID:
-        raise HTTPException(status_code=500, detail="VECTOR_STORE_ID is missing.")
+async def post_message(
+    thread_id: str,
+    msg: ChatMessage,
+    background_tasks: BackgroundTasks,
+):
+    """Post a message and get a Claude response."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is missing.")
+    if thread_id not in THREADS:
+        raise HTTPException(
+            status_code=404,
+            detail="Thread not found. Please reset your conversation.",
+        )
+
+    if msg.flow_mode:
+        THREAD_MODES[thread_id] = msg.flow_mode
+
+    flow_mode = THREAD_MODES.get(thread_id, "general")
+    use_mcp = flow_mode == "insights"
+    use_knowledge_base = flow_mode == "solutions"
 
     try:
-        response = client.responses.create(
-            model="gpt-4o",
-            conversation={"id": thread_id},
-            store=True,
-            instructions=NEW_INSTRUCTIONS,
-            tools=[{"type": "file_search", "vector_store_ids": [VECTOR_STORE_ID]}],
-            input=msg.content
+        THREADS[thread_id].append({"role": "user", "content": msg.content})
+
+        search_blocks = (
+            knowledge_base.build_search_result_blocks(msg.content)
+            if knowledge_base.loaded and use_knowledge_base
+            else []
         )
-        
-        run_id = response.id
-        LATEST_RESPONSES[run_id] = response
-        
-        print(f"🏃 Completed response {run_id} for conversation {thread_id}")
+
+        if use_mcp:
+            run_id = f"run_{uuid.uuid4().hex}"
+            LATEST_RESPONSES[run_id] = "in_progress"
+            RUN_PROGRESS[run_id] = "Connecting to SamaajData..."
+            background_tasks.add_task(
+                _process_insights_message,
+                thread_id,
+                run_id,
+                msg.content,
+            )
+            print(f"🏃 Started insights job {run_id} for thread {thread_id}")
+            return {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "async_mode": True,
+            }
+
+        assistant_text, run_id = await generate_standard(
+            client,
+            model=CLAUDE_MODEL,
+            system=NEW_INSTRUCTIONS,
+            history=THREADS[thread_id],
+            user_text=msg.content,
+            search_blocks=search_blocks,
+        )
+
+        THREADS[thread_id].append({"role": "assistant", "content": assistant_text})
+        LATEST_RESPONSES[run_id] = "completed"
+
+        print(f"🏃 Completed response {run_id} for thread {thread_id} ({flow_mode})")
         return {"thread_id": thread_id, "run_id": run_id}
     except Exception as e:
+        THREADS[thread_id].pop()
         print(f"❌ Error getting response: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/threads/{thread_id}/runs/{run_id}")
 def check_run_status(thread_id: str, run_id: str):
     """Poll for the completion of a response."""
-    if run_id in LATEST_RESPONSES:
-        return {"status": LATEST_RESPONSES[run_id].status}
-    return {"status": "in_progress"}
+    status = LATEST_RESPONSES.get(run_id, "in_progress")
+    payload = {"status": status}
+    if run_id in RUN_PROGRESS:
+        payload["progress"] = RUN_PROGRESS[run_id]
+    return payload
 
 @app.get("/threads/{thread_id}/messages")
 def get_messages(thread_id: str):
-    """Fetch the latest messages from the conversation."""
-    try:
-        items = client.conversations.items.list(conversation_id=thread_id)
-        messages = []
-        for item in items.data:
-            if item.type == 'message':
-                messages.append({
-                    "role": item.role,
-                    "content": item.content[0].text if item.content else ""
-                })
-        return {"messages": messages[::-1]}
-    except Exception as e:
-        print(f"❌ Error fetching messages: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Fetch messages from the conversation."""
+    if thread_id not in THREADS:
+        raise HTTPException(
+            status_code=404,
+            detail="Thread not found. Please reset your conversation.",
+        )
+    return {"messages": THREADS[thread_id]}
 
 async def send_to_sheet(entry: LogEntry):
     if not LOG_SHEET_URL:
@@ -180,7 +301,7 @@ async def log_interaction(entry: LogEntry, background_tasks: BackgroundTasks):
 # -----------------------------------------------------------------------------
 try:
     app.mount("/static", StaticFiles(directory="static"), name="static")
-except:
+except Exception:
     pass
 
 @app.get("/", response_class=HTMLResponse)
@@ -188,7 +309,14 @@ def serve_index():
     try:
         index_path = Path(__file__).parent / "static" / "index.html"
         if index_path.exists():
-            return index_path.read_text()
+            # Prevent the browser from serving a stale cached page so frontend
+            # changes always take effect on reload.
+            headers = {
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+            return HTMLResponse(content=index_path.read_text(), headers=headers)
         return "<h1>Static index.html not found.</h1>"
     except Exception as e:
         return f"<h1>Server Error</h1><p>{str(e)}</p>"
