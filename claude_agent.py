@@ -146,13 +146,21 @@ async def generate_standard(
     history: List[Dict[str, Any]],
     user_text: str,
     search_blocks: Optional[List[Dict[str, Any]]] = None,
+    flow_hint: Optional[str] = None,
 ) -> Tuple[str, str]:
     search_blocks = search_blocks or []
     messages = build_messages_for_claude(history, user_text, search_blocks)
+    turn_system = system
+    if flow_hint:
+        turn_system = (
+            system
+            + "\n\n[TURN INSTRUCTION — follow exactly for this reply only]\n"
+            + flow_hint
+        )
     response = client.messages.create(
         model=model,
         max_tokens=4096,
-        system=system,
+        system=turn_system,
         messages=messages,
     )
     return _extract_text(response.content), response.id

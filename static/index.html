@@ -6,6 +6,10 @@
     <title>Civic Mentor | Community Intelligence</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="/static/cda-solutions.js"></script>
+    <script src="/static/cda-voice.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -330,6 +334,143 @@
             color: var(--text-main);
             line-height: 1.25;
         }
+
+        /* Recipe progress (Solutions) */
+        #recipe-bar {
+            display: none;
+            padding: 0.5rem 1rem;
+            background: #f5f3ff;
+            border-bottom: 1px solid #e0e7ff;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+        #recipe-bar.active { display: block; }
+        .recipe-steps {
+            display: flex;
+            gap: 0.35rem;
+            margin-top: 0.35rem;
+        }
+        .recipe-step {
+            flex: 1;
+            text-align: center;
+            padding: 0.35rem 0.25rem;
+            border-radius: 0.5rem;
+            background: white;
+            border: 1px solid #e2e8f0;
+            font-size: 0.65rem;
+            line-height: 1.2;
+        }
+        .recipe-step.done { background: #eef2ff; border-color: #c7d2fe; color: var(--primary); font-weight: 600; }
+        .recipe-step.current { background: var(--primary); color: white; border-color: var(--primary); font-weight: 600; }
+
+        /* Blueprint & PDF */
+        .bubble-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+        .bubble-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.45rem 0.75rem;
+            border-radius: 0.5rem;
+            border: none;
+            cursor: pointer;
+        }
+        .bubble-btn-view { background: #eef2ff; color: #4338ca; }
+        .bubble-btn-view:hover { background: #e0e7ff; }
+        .bubble-btn-pdf { background: #4f46e5; color: white; }
+        .bubble-btn-pdf:hover { background: #4338ca; }
+        .blueprint-toggle {
+            margin-top: 0.75rem;
+            width: 100%;
+            text-align: left;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: #4338ca;
+            background: #eef2ff;
+            border: 1px solid #c7d2fe;
+            border-radius: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+        }
+        .blueprint-technical {
+            margin-top: 0.5rem;
+            padding: 0.75rem;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+        }
+        .blueprint-technical.collapsed { display: none; }
+        .drawer-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .drawer-btn {
+            flex: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.35rem;
+            padding: 0.6rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+        }
+        .drawer-btn-primary { background: var(--primary); color: white; }
+        .drawer-btn-primary:hover { background: #4338ca; }
+        .pdf-export-sheet {
+            position: fixed;
+            left: -9999px;
+            top: 0;
+            width: 720px;
+            padding: 2rem;
+            background: white;
+            font-family: 'Outfit', sans-serif;
+            color: #1e293b;
+        }
+        .pdf-export-sheet h1 { color: #4f46e5; font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .pdf-meta { color: #64748b; font-size: 0.75rem; margin-bottom: 1.5rem; }
+
+        /* Voice controls */
+        button.voice-btn, button.mic-btn {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+        button.mic-btn.recording { color: #ef4444; background: #fef2f2; animation: pulse 1s infinite; }
+        button.voice-btn.active { color: var(--primary); background: #eef2ff; }
+        @keyframes pulse { 50% { opacity: 0.6; } }
+        .listen-btn {
+            margin-top: 0.5rem;
+            background: #f1f5f9;
+            border: none;
+            border-radius: 999px;
+            padding: 0.35rem 0.65rem;
+            cursor: pointer;
+            color: var(--text-muted);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.7rem;
+        }
+        .listen-btn:hover { background: #e2e8f0; color: var(--primary); }
     </style>
 </head>
 <body>
@@ -350,6 +491,16 @@
                 </button>
             </div>
         </header>
+
+        <div id="recipe-bar">
+            <div style="font-weight:600;color:#4338ca;">Your civic recipe</div>
+            <div class="recipe-steps">
+                <div class="recipe-step" data-step="0">1 · Pick mission</div>
+                <div class="recipe-step" data-step="1">2 · First win today</div>
+                <div class="recipe-step" data-step="2">3 · Full blueprint</div>
+                <div class="recipe-step" data-step="3">✓ Ready</div>
+            </div>
+        </div>
 
         <div id="welcome-screen">
             <div style="margin-top: 2rem;">
@@ -405,7 +556,13 @@
         <footer>
             <form id="chat-form" onsubmit="handleSend(event)">
                 <div class="input-group">
+                    <button type="button" id="mic-btn" class="mic-btn" title="Tap to speak" onclick="CDAVoice.toggleMicPress()">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/></svg>
+                    </button>
                     <input id="user-input" type="text" placeholder="Tell me what problem you found..." autocomplete="off">
+                    <button type="button" id="voice-mode-btn" class="voice-btn" title="Voice mode — speak replies aloud" onclick="CDAVoice.toggleVoiceMode()">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
+                    </button>
                     <button type="submit" class="send">
                         <svg width="18" height="18" fill="white" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
                     </button>
@@ -422,6 +579,12 @@
                 <div class="dossier-header">
                     <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                     📋 Action Blueprint & Checklist
+                </div>
+                <div class="drawer-actions">
+                    <button type="button" id="drawer-download-pdf" class="drawer-btn drawer-btn-primary" onclick="downloadCurrentBlueprintPdf()">
+                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3v12m0 0l4-4m-4 4l-4-4M4 19h16"></path></svg>
+                        Download PDF
+                    </button>
                 </div>
                 <div style="background: var(--bg-slate); border-bottom: 2px solid var(--primary-light); padding: 0.75rem 1rem; border-radius: 0.5rem; font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 1.5rem; line-height: 1.4;">
                     <strong>💡 PRO TIP:</strong> These details are your <strong>'Secret Codes'</strong>—use the specific names and law codes below when speaking with officials. It shows you mean business.
@@ -457,6 +620,7 @@
 
         let activePollId = null;
         let displayedAssistantCount = 0;
+        let sessionReady = false;
 
         function extractImageUrls(text) {
             const urls = new Set();
@@ -486,6 +650,28 @@
         function setFlowMode(mode) {
             flowMode = mode;
             localStorage.setItem('flow_mode', mode);
+            const recipeBar = document.getElementById('recipe-bar');
+            if (recipeBar) {
+                recipeBar.classList.toggle('active', mode === 'solutions');
+            }
+            if (mode === 'solutions' && window.CDASolutions) {
+                CDASolutions.updateRecipeBar();
+            }
+        }
+
+        function updateRecipeBar(stepIndex) {
+            document.querySelectorAll('.recipe-step').forEach(el => {
+                const step = parseInt(el.dataset.step, 10);
+                el.classList.remove('done', 'current');
+                if (step < stepIndex) el.classList.add('done');
+                if (step === stepIndex) el.classList.add('current');
+            });
+        }
+
+        function downloadCurrentBlueprintPdf() {
+            const md = CDASolutions.getCurrentBlueprintMarkdown();
+            const btn = document.getElementById('drawer-download-pdf');
+            CDASolutions.downloadBlueprintPdf(md, btn);
         }
 
         const THEMES = [
@@ -496,17 +682,33 @@
         ];
 
         async function initSession() {
+            CDASolutions.configure({
+                renderChips,
+                toggleDrawer,
+                updateRecipeBar,
+            });
+            CDAVoice.configure({
+                micBtn: document.getElementById('mic-btn'),
+                voiceModeBtn: document.getElementById('voice-mode-btn'),
+                onTranscript: (text) => sendUserMessage(text),
+            });
+            await CDAVoice.checkStatus();
+
             if (!threadId) {
                 const res = await fetch('/threads', { method: 'POST' });
                 const data = await res.json();
                 threadId = data.thread_id;
                 localStorage.setItem('thread_id', threadId);
-                
-                // Show Welcome Choice Board
                 document.getElementById('welcome-screen').style.display = 'flex';
+            } else if (flowMode === 'solutions' && CDASolutions.getState().turn !== 'done') {
+                setFlowMode('solutions');
+                const resume = CDASolutions.resumeUi(renderChips, THEMES);
+                appendMessage('assistant', resume.message);
+                if (resume.chips) renderChips(resume.chips.items, resume.chips.header);
             } else {
                 appendMessage('assistant', "Welcome back! Ready to continue your change-maker journey?");
             }
+            sessionReady = true;
         }
 
         async function selectOption(id, text) {
@@ -523,8 +725,9 @@
                 renderChips(INSIGHT_PROMPTS, 'Quick starts:');
             } else if (id === 4) {
                 setFlowMode('solutions');
+                CDASolutions.activate();
                 userInput.placeholder = 'Tell me what problem you found...';
-                appendMessage('assistant', "I'm ready to help you solve a local problem! \n\nWhat kind of issue are you facing? You can pick a category below or tell me in your own words.");
+                appendMessage('assistant', "I'm ready to help you solve a local problem — **one step at a time**, like a recipe.\n\nFirst we'll pick a proven mission, then your **first win for today**, then your full **Action Blueprint** (downloadable as PDF).\n\nWhat kind of issue are you facing?");
                 renderChips(THEMES);
             } else if (id === 3) {
                 setFlowMode('mentoring');
@@ -584,6 +787,13 @@
             } else if (role === 'assistant') {
                 const parts = body.split('---');
                 body = parts[0];
+                if (flowMode === 'solutions') {
+                    CDASolutions.renderAssistantBubble(div, content.replace(/【\d+:\d+†source】/g, ''));
+                    CDAVoice.addListenButton(div, content);
+                    chatWindow.appendChild(div);
+                    chatWindow.scrollTop = chatWindow.scrollHeight;
+                    return;
+                }
                 div.innerHTML = marked.parse(body);
                 if (parts.length > 1) {
                     const btn = document.createElement('button');
@@ -595,12 +805,14 @@
                     btn.onclick = () => toggleDrawer(true, parts.slice(1).join('---'));
                     div.appendChild(btn);
                 }
+                CDAVoice.addListenButton(div, content);
                 chatWindow.appendChild(div);
                 chatWindow.scrollTop = chatWindow.scrollHeight;
                 return;
             }
 
             div.innerHTML = marked.parse(body);
+            if (role === 'assistant') CDAVoice.addListenButton(div, content);
 
             chartUrls.forEach(url => {
                 const wrap = document.createElement('div');
@@ -615,12 +827,15 @@
 
         function toggleDrawer(show, content = '') {
             drawer.style.display = show ? 'flex' : 'none';
-            if (show) drawerContent.innerHTML = marked.parse(content);
+            if (show) {
+                drawerContent.innerHTML = typeof marked !== 'undefined' ? marked.parse(content) : content;
+            }
         }
 
         function resetSession() {
             localStorage.removeItem('thread_id');
             localStorage.removeItem('flow_mode');
+            if (window.CDASolutions) CDASolutions.resetState();
             activePollId = null;
             displayedAssistantCount = 0;
             location.reload();
@@ -631,14 +846,17 @@
             if (label) label.textContent = text;
         }
 
-        async function handleSend(e) {
-            e.preventDefault();
-            const text = userInput.value.trim();
-            if (!text) return;
+        async function sendUserMessage(text) {
+            const trimmed = (text || '').trim();
+            if (!trimmed) return;
+            if (!sessionReady || !threadId) {
+                alert('Still starting up — please wait a moment and try again.');
+                return;
+            }
 
-            appendMessage('user', text);
+            appendMessage('user', trimmed);
             userInput.value = '';
-            renderChips([]); // Clear chips on send
+            renderChips([]);
             loading.style.display = 'flex';
             setLoadingMessage(
                 flowMode === 'insights'
@@ -646,18 +864,36 @@
                     : 'Mentor is reflecting...'
             );
 
-            const res = await fetch(`/threads/${threadId}/messages`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: text, flow_mode: flowMode })
-            });
-            const data = await res.json();
-            if (!res.ok) {
+            try {
+                const res = await fetch(`/threads/${threadId}/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        content: trimmed,
+                        flow_mode: flowMode,
+                        flow_hint: flowMode === 'solutions' ? CDASolutions.resolveFlowHint(trimmed) : null,
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    loading.style.display = 'none';
+                    const hint = (data.detail || '').toLowerCase().includes('claude')
+                        ? '\n\n(Your voice input was received — this is a Claude API connection issue, not the microphone.)'
+                        : '';
+                    appendMessage('assistant', `Something went wrong: ${data.detail || 'Server error'}.${hint} Please try again or reset.`);
+                    return;
+                }
+                pollStatus(threadId, data.run_id);
+            } catch (err) {
                 loading.style.display = 'none';
-                appendMessage('assistant', `Something went wrong: ${data.detail || 'Server error'}. Please try again or reset.`);
-                return;
+                console.error(err);
+                appendMessage('assistant', "Couldn't reach the server. Is uvicorn still running on port 8000?");
             }
-            pollStatus(threadId, data.run_id);
+        }
+
+        async function handleSend(e) {
+            e.preventDefault();
+            await sendUserMessage(userInput.value);
         }
 
         async function pollStatus(tid, rid) {
@@ -727,6 +963,10 @@
 
             if (flowMode === 'insights') {
                 renderChips(INSIGHT_FOLLOWUPS, 'Go deeper:');
+            } else if (flowMode === 'solutions') {
+                const userMsg = data.messages.length >= 2 ? data.messages[data.messages.length - 2] : null;
+                CDASolutions.afterAssistantMessage(last.content, userMsg);
+                await CDAVoice.maybeSpeakAssistantReply(last.content);
             } else {
                 const lowerText = last.content.toLowerCase();
                 if (lowerText.includes('passionate about') || lowerText.includes('theme') || lowerText.includes('area')) {

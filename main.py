@@ -19,7 +19,7 @@ from knowledge_base import KnowledgeBase
 # CONFIGURATION
 # -----------------------------------------------------------------------------
 load_dotenv()
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+ANTHROPIC_API_KEY = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 LOG_SHEET_URL = os.environ.get("LOG_SHEET_URL")
 KNOWLEDGE_BASE_CSV = os.environ.get("KNOWLEDGE_BASE_CSV", "knowledge_base_11_columns.csv")
@@ -72,13 +72,22 @@ ENTRY POINT HANDLING:
         5. Specific help needed from a mentor.
     - **Recap**: ONLY after all 5 details are collected, provide a structured summary and ask: "Does this look right? Once you confirm, I'll send this to our mentor team."
     - **Final Promise**: After confirmation, provide the 48-hour promise.
-4. "I have a problem need solutions": This is your core problem-solving flow. Use your knowledge base to find relevant civic solutions and data-driven missions.
+4. "I have a problem need solutions": Initiate the **Solutions Recipe Flow** — step-by-step, never dump the full mission at once.
+    - **Turn A (picker)**: Present exactly **2** verified missions from the library with title + one story sentence each. Ask which feels doable — 1 or 2? No action steps yet.
+    - **Turn B (first win)**: After they pick, give ONE micro-action for today (~15–20 min) from the start of Action_Steps. Celebrate briefly. End by offering the full blueprint.
+    - **Turn C (full plan)**: Only when they ask for full plan/PDF. Warm intro + **Primary_Goal**, then "---", then numbered Action_Steps + Communication_Script + tips. End: "Tap **Download PDF** below."
+    - Keep conversation warm; put scripts, officials, and checklists after the "---" delimiter.
+    - Never mention CSV, search, retrieval, or file names.
 """.strip()
 
 if not ANTHROPIC_API_KEY:
     print("WARNING: ANTHROPIC_API_KEY is not set. The assistant will not function.")
 
-client = Anthropic(api_key=ANTHROPIC_API_KEY or "missing")
+client = Anthropic(
+    api_key=ANTHROPIC_API_KEY or "missing",
+    max_retries=2,
+    timeout=120.0,
+)
 
 knowledge_base = KnowledgeBase(
     Path(__file__).parent / KNOWLEDGE_BASE_CSV,
@@ -113,6 +122,7 @@ RUN_PROGRESS: Dict[str, str] = {}
 class ChatMessage(BaseModel):
     content: str
     flow_mode: Optional[str] = None
+    flow_hint: Optional[str] = None
 
 class ThreadResponse(BaseModel):
     thread_id: str
@@ -251,6 +261,7 @@ async def post_message(
             history=THREADS[thread_id],
             user_text=msg.content,
             search_blocks=search_blocks,
+            flow_hint=msg.flow_hint,
         )
 
         THREADS[thread_id].append({"role": "assistant", "content": assistant_text})
@@ -260,8 +271,18 @@ async def post_message(
         return {"thread_id": thread_id, "run_id": run_id}
     except Exception as e:
         THREADS[thread_id].pop()
-        print(f"❌ Error getting response: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        err = str(e)
+        print(f"❌ Error getting response: {err}")
+        if "connection" in err.lower():
+            detail = (
+                "Could not reach Claude API. Check your internet, VPN/firewall, "
+                "and ANTHROPIC_API_KEY in .env — then restart the server."
+            )
+        elif "authentication" in err.lower() or "api_key" in err.lower():
+            detail = "Invalid or missing ANTHROPIC_API_KEY. Update .env and restart."
+        else:
+            detail = err
+        raise HTTPException(status_code=500, detail=detail)
 
 @app.get("/threads/{thread_id}/runs/{run_id}")
 def check_run_status(thread_id: str, run_id: str):
